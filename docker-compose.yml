@@ -1,0 +1,107 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: loanorbit_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-loanorbit_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-loanorbit_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-loanorbit_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-loanorbit_user} -d ${POSTGRES_DB:-loanorbit_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: loanorbit_redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: loanorbit_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-loanorbit_user}:${POSTGRES_PASSWORD:-loanorbit_secure_password}@postgres:5432/${POSTGRES_DB:-loanorbit_db}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-loanorbit_user}:${POSTGRES_PASSWORD:-loanorbit_secure_password}@postgres:5432/${POSTGRES_DB:-loanorbit_db}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /opt/loanorbit/storage/private
+    volumes:
+      - storage_data:/opt/loanorbit/storage/private
+      - logs_data:/opt/loanorbit/logs
+    ports:
+      - "8000:8000"
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: loanorbit_celery
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-loanorbit_user}:${POSTGRES_PASSWORD:-loanorbit_secure_password}@postgres:5432/${POSTGRES_DB:-loanorbit_db}
+      SYNC_DATABASE_URL: postgresql://${POSTGRES_USER:-loanorbit_user}:${POSTGRES_PASSWORD:-loanorbit_secure_password}@postgres:5432/${POSTGRES_DB:-loanorbit_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      STORAGE_DIR: /opt/loanorbit/storage/private
+    volumes:
+      - storage_data:/opt/loanorbit/storage/private
+
+  admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    container_name: loanorbit_admin
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+
+  gateway:
+    image: nginx:alpine
+    container_name: loanorbit_gateway
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+      - admin
+
+volumes:
+  postgres_data:
+  redis_data:
+  storage_data:
+  logs_data:

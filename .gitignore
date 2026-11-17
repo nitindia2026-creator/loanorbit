@@ -57,6 +57,11 @@ Thumbs.db
 *.swp
 *.swo
 
+# Databases
+*.db
+*.sqlite3
+loanorbit.db
+
 # Storage & Logs
 storage/private/*
 !storage/private/.gitkeep
