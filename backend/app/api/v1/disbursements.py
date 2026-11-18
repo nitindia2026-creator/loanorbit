@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import uuid
+from typing import List, Optional
 from fastapi import APIRouter, Depends, Header
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.api.v1.deps import get_current_admin, require_permission
 from app.core.database import get_db
 from app.core.errors import BusinessLogicException, ResourceNotFoundException
+from app.core.idempotency import check_idempotency, save_idempotency
 from app.core.permissions import PermissionEnum
 from app.financial.ledger import create_balanced_journal_entry
 from app.models.bank import BankVerification
@@ -20,10 +22,24 @@ from app.providers.lender import lender_provider
 router = APIRouter(prefix="/disbursements", tags=["Disbursements"])
 
 
+@router.get("")
+async def list_disbursements(
+    limit: int = 50,
+    admin: AdminUser = Depends(require_permission(PermissionEnum.DISBURSEMENT_TRIGGER)),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns disbursement attempts and statuses for admin finance desk.
+    """
+    stmt = select(Disbursement).order_by(Disbursement.created_at.desc()).limit(limit)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
 @router.post("/trigger/{loan_id}")
 async def trigger_disbursement(
     loan_id: str,
-    idempotency_key: str = Header(None),
+    idempotency_key: Optional[str] = Header(None),
     admin: AdminUser = Depends(require_permission(PermissionEnum.DISBURSEMENT_TRIGGER)),
     db: AsyncSession = Depends(get_db),
 ):
@@ -31,7 +47,13 @@ async def trigger_disbursement(
     Executes mock disbursement for a loan in PENDING_DISBURSEMENT state.
     Updates loan status to ACTIVE only upon successful mock confirmation.
     Posts balanced General Ledger journal entries.
+    Includes Idempotency protection.
     """
+    # 1. Idempotency Check
+    cached = await check_idempotency(db, idempotency_key, f"/disbursements/trigger/{loan_id}", {"loan_id": loan_id})
+    if cached:
+        return cached[1]
+
     stmt = (
         select(Loan)
         .where(Loan.id == loan_id)
@@ -52,7 +74,7 @@ async def trigger_disbursement(
         .order_by(BankVerification.created_at.desc())
     )
     bank_res = await db.execute(bank_stmt)
-    bank_acc = bank_res.scalar_one_or_none()
+    bank_acc = bank_res.scalars().first()
     if not bank_acc:
         raise BusinessLogicException("Borrower has no verified bank account for disbursement.")
 
@@ -84,16 +106,11 @@ async def trigger_disbursement(
         loan.application.status = "DISBURSED"
 
         # Look up or create ledger accounts for double-entry posting
-        # 1101: Loan Principal Receivable (Asset)
-        # 1001: Cash Settlement Account (Asset)
-        # 4002: Processing Fee Income (Revenue)
-        # 2101: GST Payable (Liability)
         accounts_to_fetch = ["1101", "1001", "4002", "2101"]
         acc_stmt = select(LedgerAccount).where(LedgerAccount.account_code.in_(accounts_to_fetch))
         acc_res = await db.execute(acc_stmt)
         accounts = {a.account_code: a for a in acc_res.scalars().all()}
 
-        # Create accounts if not seeded yet
         if "1101" not in accounts:
             a = LedgerAccount(account_code="1101", account_name="Loan Principal Receivable", account_type="ASSET")
             db.add(a); await db.flush(); accounts["1101"] = a
@@ -107,7 +124,6 @@ async def trigger_disbursement(
             a = LedgerAccount(account_code="2101", account_name="GST Payable", account_type="LIABILITY")
             db.add(a); await db.flush(); accounts["2101"] = a
 
-        # Balanced Journal Entry
         entry_data = create_balanced_journal_entry(
             entry_reference=f"JRN-DISB-{loan.loan_reference}",
             entry_type="DISBURSEMENT",
@@ -138,10 +154,13 @@ async def trigger_disbursement(
             )
             db.add(j_line)
 
-    await db.commit()
-    return {
+    resp_data = {
         "success": mock_res["status"] == "SUCCESS",
         "loan_status": loan.status,
         "disbursement_status": mock_res["status"],
         "provider_reference": mock_res.get("provider_reference"),
     }
+
+    await save_idempotency(db, idempotency_key, f"/disbursements/trigger/{loan_id}", {"loan_id": loan_id}, 200, resp_data)
+    await db.commit()
+    return resp_data

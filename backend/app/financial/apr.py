@@ -11,13 +11,19 @@ def calculate_irr_apr(
     """
     Computes annualized percentage rate (APR) from monthly cash flows via Newton-Raphson IRR solver.
     Cash flows format:
-    cash_flows[0] = -net_disbursement (outflow from lender / inflow to borrower)
-    cash_flows[1..n] = +emi_amount (inflows to lender / repayments from borrower)
+    cash_flows[0] = -net_disbursement (outflow from lender / inflow to borrower, must be negative)
+    cash_flows[1..n] = +emi_amount (inflows to lender / repayments from borrower, must have at least one positive)
     """
-    if len(cash_flows) < 2 or cash_flows[0] >= 0:
-        raise ValueError("Invalid cash flows for APR computation.")
+    if len(cash_flows) < 2:
+        raise ValueError("Cash flows must contain at least an initial disbursement and one repayment.")
+    if cash_flows[0] >= 0:
+        raise ValueError("Initial cash flow (disbursement) must be negative.")
+    if not any(cf > 0 for cf in cash_flows[1:]):
+        raise ValueError("Cash flows must contain at least one positive repayment inflow.")
 
     rate = guess
+    converged = False
+
     for _ in range(max_iterations):
         npv = 0.0
         d_npv = 0.0
@@ -28,13 +34,20 @@ def calculate_irr_apr(
                 d_npv -= t * cf / ((1.0 + rate) ** (t + 1))
 
         if abs(npv) < tolerance:
-            # Annualize monthly rate: APR = monthly_rate * 12 * 100
-            return round(rate * 12.0 * 100.0, 2)
+            converged = True
+            break
 
         if abs(d_npv) < 1e-12:
             break
 
-        rate = rate - (npv / d_npv)
+        new_rate = rate - (npv / d_npv)
+        if new_rate <= -1.0:  # Prevent domain errors
+            rate = rate / 2.0
+        else:
+            rate = new_rate
 
-    # Fallback approximation if Newton-Raphson does not converge
+    if not converged and abs(npv) >= 1e-3:
+        raise ValueError("APR calculation failed to converge numerically for given cash flows.")
+
+    # Annualize monthly rate: APR = monthly_rate * 12 * 100
     return round(rate * 12.0 * 100.0, 2)

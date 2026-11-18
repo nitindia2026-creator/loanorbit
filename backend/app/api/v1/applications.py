@@ -56,7 +56,7 @@ async def submit_application(
         .order_by(KYCCase.created_at.desc())
     )
     kyc_res = await db.execute(kyc_stmt)
-    if not kyc_res.scalar_one_or_none():
+    if not kyc_res.scalars().first():
         raise BusinessLogicException("KYC must be verified before applying for a loan.")
 
     # 3. Bank verification
@@ -66,7 +66,7 @@ async def submit_application(
         .order_by(BankVerification.created_at.desc())
     )
     bank_res = await db.execute(bank_stmt)
-    if not bank_res.scalar_one_or_none():
+    if not bank_res.scalars().first():
         raise BusinessLogicException("Bank account must be verified before applying for a loan.")
 
     # 4. Product version validity

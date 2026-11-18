@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
@@ -16,6 +17,27 @@ from app.models.user import User
 from app.schemas.application import LoanOfferResponse
 
 router = APIRouter(prefix="/offers", tags=["Loan Offers"])
+
+
+@router.get("/my-pending", response_model=Optional[LoanOfferResponse])
+async def get_my_pending_offer(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns latest active ISSUED offer for the current customer, if any.
+    """
+    stmt = (
+        select(LoanOffer)
+        .join(LoanApplication)
+        .where(
+            LoanApplication.user_id == current_user.id,
+            LoanOffer.status == "ISSUED",
+        )
+        .order_by(LoanOffer.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    return result.scalars().first()
 
 
 @router.get("/{id}", response_model=LoanOfferResponse)
@@ -59,7 +81,11 @@ async def accept_loan_offer(
     if offer.status != "ISSUED":
         raise BusinessLogicException(f"Offer is not in ISSUED state (current: {offer.status}).")
 
-    if offer.expires_at < datetime.now(timezone.utc):
+    expires_at = offer.expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at and expires_at < datetime.now(timezone.utc):
         offer.status = "EXPIRED"
         await db.commit()
         raise BusinessLogicException("Loan offer has expired.")

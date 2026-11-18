@@ -9,6 +9,9 @@ import {
   History,
   LogOut,
   ShieldCheck,
+  Landmark,
+  CreditCard,
+  Headphones,
 } from 'lucide-react';
 import { clearAuthToken } from '../lib/api';
 
@@ -27,6 +30,9 @@ export const Sidebar: React.FC = () => {
     { to: '/customers', label: 'Customers', icon: Users },
     { to: '/kyc-queue', label: 'KYC Desk', icon: FileCheck2 },
     { to: '/underwriting', label: 'Underwriting', icon: FileSpreadsheet },
+    { to: '/disbursements', label: 'Disbursements', icon: Landmark },
+    { to: '/repayments', label: 'Repayments', icon: CreditCard },
+    { to: '/support', label: 'Support Desk', icon: Headphones },
     { to: '/ledger', label: 'General Ledger', icon: BookOpen },
     { to: '/audit-logs', label: 'Security & Audit', icon: History },
   ];

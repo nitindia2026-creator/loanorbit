@@ -8,6 +8,9 @@ import { KYCQueue } from './pages/KYCQueue';
 import { UnderwritingQueue } from './pages/UnderwritingQueue';
 import { Ledger } from './pages/Ledger';
 import { AuditLogs } from './pages/AuditLogs';
+import { Disbursements } from './pages/Disbursements';
+import { Repayments } from './pages/Repayments';
+import { Support } from './pages/Support';
 import { getAuthToken } from './lib/api';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -35,6 +38,9 @@ export const App: React.FC = () => {
           <Route path="customers" element={<Customers />} />
           <Route path="kyc-queue" element={<KYCQueue />} />
           <Route path="underwriting" element={<UnderwritingQueue />} />
+          <Route path="disbursements" element={<Disbursements />} />
+          <Route path="repayments" element={<Repayments />} />
+          <Route path="support" element={<Support />} />
           <Route path="ledger" element={<Ledger />} />
           <Route path="audit-logs" element={<AuditLogs />} />
         </Route>

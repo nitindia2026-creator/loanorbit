@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -58,7 +58,7 @@ class LoanOfferResponse(BaseModel):
 class InstalmentResponse(BaseModel):
     id: str
     instalment_number: int
-    due_date: str
+    due_date: date
     opening_principal_paise: int
     emi_amount_paise: int
     principal_component_paise: int

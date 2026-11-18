@@ -29,7 +29,7 @@ async def get_active_loan(
         .order_by(Loan.created_at.desc())
     )
     result = await db.execute(stmt)
-    loan = result.scalar_one_or_none()
+    loan = result.scalars().first()
     if not loan:
         return None
 
@@ -49,7 +49,7 @@ async def get_loan_by_id(
         .options(selectinload(Loan.instalments))
     )
     result = await db.execute(stmt)
-    loan = result.scalar_one_or_none()
+    loan = result.scalars().first()
     if not loan:
         raise ResourceNotFoundException("Loan", id)
     return loan

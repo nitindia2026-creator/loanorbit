@@ -1,6 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
-from fastapi import APIRouter, Depends, status
+from typing import Optional
+from fastapi import APIRouter, Depends, Header, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +27,10 @@ from app.schemas.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 
 @router.post("/otp/request", response_model=OTPResponse)
@@ -70,12 +76,13 @@ async def verify_otp(payload: OTPVerifyRequest, db: AsyncSession = Depends(get_d
     access_token = create_access_token(subject=user.id, role="CUSTOMER")
     refresh_token = create_refresh_token(subject=user.id, role="CUSTOMER")
 
-    # Persist refresh token hash
+    # Persist refresh token hash with proper future expiration
     rf_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
     db_token = RefreshToken(
         user_id=user.id,
         token_hash=rf_hash,
-        expires_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        revoked=False,
     )
     db.add(db_token)
     await db.commit()
@@ -112,7 +119,8 @@ async def admin_login(payload: AdminLoginRequest, db: AsyncSession = Depends(get
     db_token = RefreshToken(
         admin_user_id=admin.id,
         token_hash=rf_hash,
-        expires_at=datetime.now(timezone.utc),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        revoked=False,
     )
     db.add(db_token)
     await db.commit()
@@ -125,3 +133,78 @@ async def admin_login(payload: AdminLoginRequest, db: AsyncSession = Depends(get
         "user_id": admin.id,
         "role": admin.role.value,
     }
+
+
+@router.post("/refresh", response_model=Token)
+async def refresh_tokens(payload: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Exchanges a valid refresh token for a new access token and rotated refresh token.
+    Enforces single-use rotation and revocation.
+    """
+    try:
+        token_data = decode_token(payload.refresh_token)
+        if token_data.get("type") != "refresh":
+            raise UnauthorizedException("Invalid token type. Refresh token required.")
+        sub = token_data.get("sub")
+        role = token_data.get("role", "CUSTOMER")
+    except Exception:
+        raise UnauthorizedException("Invalid or expired refresh token.")
+
+    rf_hash = hashlib.sha256(payload.refresh_token.encode()).hexdigest()
+    stmt = select(RefreshToken).where(RefreshToken.token_hash == rf_hash)
+    result = await db.execute(stmt)
+    stored_token = result.scalar_one_or_none()
+
+    if not stored_token:
+        raise UnauthorizedException("Refresh token not found.")
+    if stored_token.revoked:
+        raise UnauthorizedException("Refresh token has been revoked.")
+    exp = stored_token.expires_at
+    if exp and exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp and exp < datetime.now(timezone.utc):
+        raise UnauthorizedException("Refresh token has expired.")
+
+    # Mark old token as revoked (Rotation)
+    stored_token.revoked = True
+
+    # Issue new token pair
+    new_access = create_access_token(subject=sub, role=role)
+    new_refresh = create_refresh_token(subject=sub, role=role)
+
+    new_hash = hashlib.sha256(new_refresh.encode()).hexdigest()
+    new_db_token = RefreshToken(
+        user_id=stored_token.user_id,
+        admin_user_id=stored_token.admin_user_id,
+        token_hash=new_hash,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+        revoked=False,
+    )
+    db.add(new_db_token)
+    await db.commit()
+
+    return {
+        "access_token": new_access,
+        "refresh_token": new_refresh,
+        "token_type": "bearer",
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "user_id": sub,
+        "role": role,
+    }
+
+
+@router.post("/logout")
+async def logout(payload: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Revokes the provided refresh token session.
+    """
+    rf_hash = hashlib.sha256(payload.refresh_token.encode()).hexdigest()
+    stmt = select(RefreshToken).where(RefreshToken.token_hash == rf_hash)
+    result = await db.execute(stmt)
+    stored_token = result.scalar_one_or_none()
+
+    if stored_token:
+        stored_token.revoked = True
+        await db.commit()
+
+    return {"success": True, "message": "Successfully logged out."}

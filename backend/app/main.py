@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import logging
+import os
 import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,9 +36,21 @@ setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables automatically on startup for local development / testing
+    # Ensure private storage directory exists
+    os.makedirs(settings.STORAGE_DIR, exist_ok=True)
+
+    # Create tables automatically on startup
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Optionally seed database if explicitly enabled via AUTO_SEED env
+    if os.getenv("AUTO_SEED", "false").lower() == "true":
+        try:
+            from app.scripts.seed import run_seed
+            await run_seed()
+        except Exception as e:
+            logging.getLogger("loanorbit").warning(f"Startup database seed skipped: {e}")
+
     yield
 
 
@@ -49,10 +63,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS Middleware
+# CORS Middleware - Support dynamic origins and credentialed browser requests
+cors_origins = settings.BACKEND_CORS_ORIGINS
+allow_origin_regex = None
+if "*" in cors_origins:
+    allow_origin_regex = r"^https?://.*"
+    cors_origins = []
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=cors_origins,
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

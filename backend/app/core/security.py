@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Union
+import uuid
 from jose import jwt
 from passlib.context import CryptContext
 from app.core.config import settings
@@ -30,6 +31,7 @@ def create_access_token(
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode = {
+        "jti": uuid.uuid4().hex,
         "sub": str(subject),
         "role": role,
         "exp": expire,
@@ -54,6 +56,7 @@ def create_refresh_token(
         expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         
     to_encode = {
+        "jti": uuid.uuid4().hex,
         "sub": str(subject),
         "role": role,
         "exp": expire,
